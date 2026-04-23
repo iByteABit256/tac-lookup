@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Retrieves device information from the Osmocom TAC database, private and fully offline"
 license = "GPL-3.0"
+homepage = "https://github.com/iByteABit256/tac-lookup"
 
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"]}

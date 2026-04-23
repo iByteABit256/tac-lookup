@@ -13,7 +13,7 @@ The first 8 digits of any IMEI form the **TAC (Type Allocation Code)**, which id
 Requires Rust — install via [rustup](https://rustup.rs) if needed.
 
 ```bash
-git clone https://github.com/your-handle/tac-lookup
+git clone https://github.com/iByteABit256/tac-lookup
 cd tac-lookup
 cargo build --release
 ```
