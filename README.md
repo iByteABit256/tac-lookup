@@ -32,7 +32,7 @@ cargo install --path .
 tac-lookup update
 ```
 
-This fetches the Osmocom CSV (~5 MB) and imports it into a local SQLite file. The database is stored in your platform's cache directory:
+This fetches the Osmocom SQLite file and stores in your platform's cache directory:
 
 - **Linux:** `~/.cache/tac-lookup/tacdb.sqlite3`
 - **macOS:** `~/Library/Caches/com.tac-lookup.tac-lookup/tacdb.sqlite3`
