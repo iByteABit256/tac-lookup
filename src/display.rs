@@ -44,6 +44,18 @@ pub fn print_result(result: &LookupResult, no_validate: bool) {
         Some(rec) => {
             println!("  {} {}", "Brand:".bold(), rec.brand.bold());
             println!("  {} {}", "Model:".bold(), rec.model);
+            if let Some(ref d) = rec.date {
+                println!("  {} {}", "Date: ".bold(), d.dimmed());
+            }
+            if let Some(ref s) = rec.gsmarena {
+                println!("  {} {}", "GSM:  ".bold(), s.dimmed());
+            }
+            if let Some(ref s) = rec.phonearena {
+                println!("  {} {}", "PA:   ".bold(), s.dimmed());
+            }
+            if let Some(ref s) = rec.phonedb {
+                println!("  {} {}", "PDB:  ".bold(), s.dimmed());
+            }
         }
         None if !result.tac.is_empty() => {
             println!(
@@ -64,7 +76,7 @@ pub fn print_results_footer() {
 
 pub fn print_update_outcome(outcome: &UpdateOutcome, db: &crate::db::Database) {
     if !outcome.ran {
-        if let Ok(Some(age)) = age_secs(db) {
+        if let Some(age) = age_secs(&db.path) {
             let age_days = age / 86400;
             println!(
                 "{} Database is {} day(s) old — use {} to force a re-download.",
@@ -79,17 +91,9 @@ pub fn print_update_outcome(outcome: &UpdateOutcome, db: &crate::db::Database) {
     println!(
         "{} Imported {} TAC records.",
         "✓".green().bold(),
-        outcome.records_imported.to_string().bold()
+        outcome.record_count.to_string().bold()
     );
     println!("  Saved to: {}", db.path.display().to_string().dimmed());
-
-    if !outcome.parse_errors.is_empty() {
-        println!(
-            "  {} {} row(s) skipped due to parse errors.",
-            "⚠".yellow(),
-            outcome.parse_errors.len()
-        );
-    }
 }
 
 pub fn print_update_start() {

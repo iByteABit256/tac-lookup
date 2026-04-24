@@ -74,6 +74,8 @@ tac-lookup info
   Luhn:  ✓ Valid
   Brand: Apple
   Model: iPhone 6
+  Date:  2017-10-05 08:51:46
+  PA:    http://www.phonearena.com/phones/Apple-iPhone-6_id8346
 ──────────────────────────────────────────────────
 ```
 

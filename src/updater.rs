@@ -1,46 +1,43 @@
-//! Downloads the Osmocom TAC CSV and imports it into the local database.
+//! Downloads the Osmocom TAC SQLite file to the local cache.
 
 use anyhow::{Context, Result, anyhow};
-use serde::Deserialize;
+use std::io::Write;
+use std::path::Path;
 
 use crate::db::Database;
 
-const OSMOCOM_CSV_URL: &str = "http://tacdb.osmocom.org/export/tacdb.csv";
+const OSMOCOM_SQLITE_URL: &str = "http://tacdb.osmocom.org/export/tacdb.sqlite3";
 /// Minimum age in seconds before `update` considers the database stale (7 days).
 const STALE_AFTER_SECS: u64 = 7 * 24 * 60 * 60;
 
-// ─── Osmocom CSV row ───────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-struct OsmocomRow {
-    tac: String,
-    brand: String,
-    model: String,
-}
-
 // ─── Staleness check ───────────────────────────────────────────────────────────
 
-/// How many seconds old the database is, or `None` if it has never been updated.
-pub fn age_secs(db: &Database) -> Result<Option<u64>> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+/// How many seconds old the database file is based on its mtime, or `None` if
+/// the file doesn't exist yet.
+pub fn age_secs(path: &Path) -> Option<u64> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let age = std::time::SystemTime::now()
+        .duration_since(modified)
         .unwrap_or_default()
         .as_secs();
-    Ok(db.last_updated()?.map(|ts| now.saturating_sub(ts)))
+    Some(age)
 }
 
-/// Returns `true` if the database should be (re-)downloaded.
-pub fn is_stale(db: &Database) -> Result<bool> {
-    match age_secs(db)? {
-        None => Ok(true), // never downloaded
-        Some(age) => Ok(age >= STALE_AFTER_SECS),
+/// Returns `true` if the database file should be (re-)downloaded.
+pub fn is_stale(path: &Path) -> bool {
+    match age_secs(path) {
+        None => true, // file doesn't exist yet
+        Some(age) => age >= STALE_AFTER_SECS,
     }
 }
 
 // ─── Download ──────────────────────────────────────────────────────────────────
 
-/// Download the Osmocom CSV and return its body as a `String`.
-pub fn download_csv() -> Result<String> {
+/// Download the Osmocom SQLite file, writing it atomically to `dest`.
+///
+/// We download to a sibling `.tmp` file first and rename on success, so a
+/// failed or interrupted download never leaves a corrupt database behind.
+pub fn download_sqlite(dest: &Path) -> Result<()> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
         .user_agent(concat!(
@@ -51,7 +48,7 @@ pub fn download_csv() -> Result<String> {
         .build()?;
 
     let resp = client
-        .get(OSMOCOM_CSV_URL)
+        .get(OSMOCOM_SQLITE_URL)
         .send()
         .context("Failed to reach tacdb.osmocom.org")?;
 
@@ -59,78 +56,50 @@ pub fn download_csv() -> Result<String> {
         return Err(anyhow!(
             "Server returned HTTP {} for {}",
             resp.status(),
-            OSMOCOM_CSV_URL
+            OSMOCOM_SQLITE_URL
         ));
     }
 
-    resp.text().context("Failed to read response body")
-}
+    let bytes = resp.bytes().context("Failed to read response body")?;
 
-// ─── Parse ─────────────────────────────────────────────────────────────────────
+    // Write to a temp file next to the destination, then rename atomically.
+    let tmp = dest.with_extension("sqlite3.tmp");
+    let mut file = std::fs::File::create(&tmp)
+        .with_context(|| format!("Could not create temp file: {}", tmp.display()))?;
+    file.write_all(&bytes)
+        .context("Failed to write database to disk")?;
+    std::fs::rename(&tmp, dest).context("Failed to move downloaded database into place")?;
 
-/// Parse the Osmocom CSV body and return `(tac, brand, model)` tuples.
-/// Rows with a non-8-digit TAC are silently skipped; other parse errors are
-/// returned as a collected `Vec` of error strings alongside the good rows.
-pub fn parse_csv(body: &str) -> (Vec<(String, String, String)>, Vec<String>) {
-    let mut rows = Vec::new();
-    let mut errors = Vec::new();
-
-    let mut rdr = csv::ReaderBuilder::new()
-        .has_headers(false)
-        .flexible(true)
-        .from_reader(body.as_bytes());
-
-    for result in rdr.deserialize::<OsmocomRow>() {
-        match result {
-            Ok(row) => {
-                let tac = row.tac.trim().to_string();
-                if tac.len() == 8 && tac.chars().all(|c| c.is_ascii_digit()) {
-                    rows.push((
-                        tac,
-                        row.brand.trim().to_string(),
-                        row.model.trim().to_string(),
-                    ));
-                }
-                // silently skip TACs that don't look like 8-digit codes
-            }
-            Err(e) => errors.push(e.to_string()),
-        }
-    }
-
-    (rows, errors)
+    Ok(())
 }
 
 // ─── High-level update ─────────────────────────────────────────────────────────
 
 /// The outcome of an `update` operation.
 pub struct UpdateOutcome {
-    pub records_imported: usize,
-    pub parse_errors: Vec<String>,
-    /// `true` if the download+import actually ran; `false` if skipped as fresh.
+    pub record_count: i64,
+    /// `true` if the download actually ran; `false` if skipped as fresh.
     pub ran: bool,
 }
 
-/// Download and import the Osmocom database.
+/// Download the Osmocom SQLite database to the cache path.
 ///
-/// If `force` is `false` and the database is less than 7 days old, the
-/// operation is skipped and `UpdateOutcome::ran` is `false`.
+/// If `force` is `false` and the file is less than 7 days old, the operation
+/// is skipped and `UpdateOutcome::ran` is `false`.
 pub fn run(db: &Database, force: bool) -> Result<UpdateOutcome> {
-    if !force && !is_stale(db)? {
+    if !force && !is_stale(&db.path) {
         return Ok(UpdateOutcome {
-            records_imported: 0,
-            parse_errors: vec![],
+            record_count: db.record_count()?,
             ran: false,
         });
     }
 
-    let body = download_csv()?;
-    let (rows, parse_errors) = parse_csv(&body);
-    let records_imported = db.replace_all(&rows)?;
-    db.touch_updated_at()?;
+    download_sqlite(&db.path)?;
 
+    // Re-open to count records in the freshly downloaded file.
+    let fresh = Database::open(&db.path)?;
     Ok(UpdateOutcome {
-        records_imported,
-        parse_errors,
+        record_count: fresh.record_count()?,
         ran: true,
     })
 }
